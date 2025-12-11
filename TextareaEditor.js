@@ -466,41 +466,14 @@ class TextAreaEditor extends PureComponent {
     this.setState({ editorState: newEditorState });
   };
 
-  // getSelectedText = (editorState) => {
-  //   const selectionState = editorState.getSelection();
-  //   const contentState = editorState.getCurrentContent();
-  //   const startKey = selectionState.getStartKey();
-  //   const endKey = selectionState.getEndKey();
-  //   const startOffset = selectionState.getStartOffset();
-  //   const endOffset = selectionState.getEndOffset();
-  //   const blocks = contentState.getBlockMap();
-  //   const blockArray = Array.from(blocks.values());
-
-  //   let selectedText = '';
-  //   let capture = false;
-
-  //   for (const block of blockArray) {
-  //     const key = block.getKey();
-  //     const text = block.getText()
-  //     // console.log('key', block.type);
-  //     if (key === startKey) {
-  //       capture = true;
-  //       if (key === endKey) {
-  //         selectedText += block.getText().slice(startOffset, endOffset);
-  //         break;
-  //       } else {
-  //         selectedText += block.getText().slice(startOffset);
-  //       }
-  //     } else if (key === endKey) {
-  //       selectedText += block.getText().slice(0, endOffset);
-  //       break;
-  //     } else if (capture) {
-  //       selectedText += block.getText();
-  //     }
-  //   }
-
-  //   return selectedText;
-  // };
+  escapeHtml = (text) => {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  };
 
   getSelectedText = (editorState) => {
     const selectionState = editorState.getSelection();
@@ -512,66 +485,88 @@ class TextAreaEditor extends PureComponent {
     const blocks = contentState.getBlockMap();
     const blockArray = Array.from(blocks.values());
 
-    let raw = '';
-    let paragraphText = '';
+    let plainText = '';
+    let htmlText = '';
     let capture = false;
+    let listType = null;
+    let listItems = [];
+    const selectionList = [];
 
-  let olCounter = 1; 
+    const processBlock = (block, start, end) => {
+      const text = block.getText();
+      const type = block.getType();
+      const slicedText = text.slice(start, end);
+      
+      if (slicedText.trim().length > 0) {
+        selectionList.push({
+          text: slicedText,
+          'list-type':
+            type === 'unordered-list-item' ? 'unorder-list' : type === 'ordered-list-item' ? 'order-list' : 'unstyled',
+        });
+      }
+
+      plainText += slicedText + " || ";
+
+      if (type === 'unordered-list-item' || type === 'ordered-list-item') {
+        if (listType && listType !== type) {
+          htmlText +=
+            listType === 'unordered-list-item' ? `<ul>${listItems.join('')}</ul>` : `<ol>${listItems.join('')}</ol>`;
+          listItems = [];
+        }
+        listType = type;
+        listItems.push(`<li>${this.escapeHtml(slicedText)}</li>`);
+      } else {
+        if (listType) {
+          htmlText +=
+            listType === 'unordered-list-item' ? `<ul>${listItems.join('')}</ul>` : `<ol>${listItems.join('')}</ol>`;
+          listType = null;
+          listItems = [];
+        }
+        htmlText += this.escapeHtml(slicedText);
+      }
+    };
+
     for (const block of blockArray) {
       const key = block.getKey();
-      const blockType = block.getType()
-      console.log('key', blockType);
-         let prefix = '';
-
-         if (blockType === 'unordered-list-item') {
-           prefix = '• '; // bullet prefix
-         } else if (blockType === 'ordered-list-item') {
-           prefix = `${olCounter}. `; // numeric prefix
-           olCounter++;
-         }
+      const textLength = block.getLength();
       if (key === startKey) {
         capture = true;
         if (key === endKey) {
-          const sliced = block.getText().slice(startOffset, endOffset);
-          raw += sliced;
-          paragraphText += prefix + sliced;
+          processBlock(block, startOffset, endOffset);
           break;
         } else {
-          const sliced = block.getText().slice(startOffset);
-          raw += sliced + ' ';
-          paragraphText += prefix + sliced + '\n';
+          processBlock(block, startOffset, textLength);
         }
       } else if (key === endKey) {
-        const sliced = block.getText().slice(0, endOffset);
-        raw += sliced;
-        paragraphText += prefix + sliced;
+        if (endOffset > 0) {
+          processBlock(block, 0, endOffset);
+        }
         break;
       } else if (capture) {
-        raw += block.getText() + ' ';
-        paragraphText += prefix + block.getText() + '\n';
+        processBlock(block, 0, textLength);
       }
     }
 
-    return {
-      raw,
-      paragraphText,
-    };
+    if (listType) {
+      htmlText +=
+        listType === 'unordered-list-item' ? `<ul>${listItems.join('')}</ul>` : `<ol>${listItems.join('')}</ol>`;
+    }
+
+    return { text: plainText.trim(), html: htmlText, selectionList };
   };
 
   onChange = (editorState) => {
     if (this.state.editorState !== editorState) {
-      const { setSelectedValue, setSelectedEditorState } = useAISelectionStore.getState();
+      const { setSelectedValue } = useAISelectionStore.getState();
       const selectionState = editorState.getSelection();
       this.lastSelectionState = selectionState;
       const anchorKey = selectionState.getAnchorKey();
       const currentContent = editorState.getCurrentContent();
       const currentContentBlock = currentContent.getBlockForKey(anchorKey);
-      // const aiselectedText = this.getSelectedText(editorState);
-      const { raw, paragraphText } = this.getSelectedText(editorState);
 
-      // console.log('selected Text: ', paragraphText);
-      setSelectedValue(raw);
-      setSelectedEditorState(paragraphText);
+      const { text: aiselectedText, html: aiselectedHtml, selectionList } = this.getSelectedText(editorState);
+      setSelectedValue(aiselectedText, aiselectedHtml, selectionList);
+
       const start = selectionState.getStartOffset();
       const end = selectionState.getEndOffset();
       const selectedText = currentContentBlock?.getText()?.slice(start, end);
@@ -584,8 +579,7 @@ class TextAreaEditor extends PureComponent {
 
       let linksSelected = false;
       let textSelected = selectedText && selectedText !== '';
-
-      const isMoreSelected = raw && raw?.trim().split(' ').length > 1;
+      const isMoreSelected = aiselectedText && aiselectedText?.trim().split(' ').length > 1;
 
       links.forEach((link) => {
         if ((start >= link.start && start <= link.end) || (end >= link.start && end <= link.end)) {
@@ -1091,6 +1085,8 @@ class TextAreaEditor extends PureComponent {
       return;
     }
 
+    this.lastValidSelection = this.state.editorState.getSelection();
+
     const range = selection.getRangeAt(0);
     const selectionRect = range.getBoundingClientRect();
     const containerRect = editorWrapper.getBoundingClientRect();
@@ -1129,7 +1125,7 @@ class TextAreaEditor extends PureComponent {
 
   replaceSelectedText = (replacementText) => {
     const { editorState } = this.state;
-    let selectionState = this.lastSelectionState || editorState.getSelection();
+    let selectionState = this.lastValidSelection || editorState.getSelection();
     const contentState = editorState.getCurrentContent();
 
     const endKey = selectionState.getEndKey();
@@ -1146,7 +1142,54 @@ class TextAreaEditor extends PureComponent {
       }
     }
 
-    const newContentState = Modifier.replaceText(contentState, selectionState, replacementText);
+    if (Array.isArray(replacementText)) {
+      const startKeyFn = selectionState.getStartKey();
+      const endKeyFn = selectionState.getEndKey();
+      const blockMap = contentState.getBlockMap();
+      const selectedBlocks = [];
+      let inSelection = false;
+
+      blockMap.forEach((block, key) => {
+        if (key === startKeyFn) inSelection = true;
+        if (inSelection) selectedBlocks.push(block);
+        if (key === endKeyFn) inSelection = false;
+      });
+
+      if (selectedBlocks.length > 1 && selectedBlocks.length === replacementText.length) {
+        let newContentState = contentState;
+        selectedBlocks.forEach((block, index) => {
+          const key = block.getKey();
+          const text = replacementText[index];
+          let start = 0;
+          let end = block.getLength();
+
+          if (key === startKeyFn) {
+            start = selectionState.getStartOffset();
+          }
+          if (key === endKeyFn) {
+            end = selectionState.getEndOffset();
+          }
+
+          const blockSelection = SelectionState.createEmpty(key).merge({
+            anchorKey: key,
+            anchorOffset: start,
+            focusKey: key,
+            focusOffset: end,
+          });
+
+          newContentState = Modifier.replaceText(newContentState, blockSelection, text);
+        });
+
+        const newEditorState = EditorState.push(editorState, newContentState, 'insert-characters');
+        const withFocus = EditorState.forceSelection(newEditorState, newContentState.getSelectionAfter());
+        this.setState({ showFloatingAIButton: false });
+        this.onChange(withFocus);
+        return;
+      }
+    }
+
+    const textToReplace = Array.isArray(replacementText) ? replacementText.join('\n') : replacementText;
+    const newContentState = Modifier.replaceText(contentState, selectionState, textToReplace);
     const newEditorState = EditorState.push(editorState, newContentState, 'insert-characters');
     const withFocus = EditorState.forceSelection(newEditorState, newContentState.getSelectionAfter());
     this.setState({ showFloatingAIButton: false });
