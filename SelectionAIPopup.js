@@ -49,7 +49,8 @@ const SelectionAIPopup = ({ onClose, openState, updateValue, resumeId, resumeLan
   const { trackEvent } = useTracking();
   const isBlog = isBlogDomain(host);
 
-  const { selectedValue, selectedEditorState, aiState, updateAIState, resetAIState } = useAISelectionStore();
+  const { selectedValue, selectedDisplayHTML, aiState, updateAIState, resetAIState, selectionList } =
+    useAISelectionStore();
   const { inputValue, loading, aiOutPut } = aiState;
 
   const hasResponse = aiOutPut !== null;
@@ -100,20 +101,115 @@ const SelectionAIPopup = ({ onClose, openState, updateValue, resumeId, resumeLan
 
   const handleReplaceValue = () => {
     trackEvent('selection_ai_added');
-    updateValue(aiOutPut);
+    const cleanOutput = getCleanListOutput();
+    updateValue(cleanOutput);
     resetAIState();
     onClose();
   };
+  const splitByPipes = (text) => {
+    if (!text) return [];
+    return text
+      .split('||')
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+  };
+
+  const normalizeAIOutput = () => {
+    if (!Array.isArray(aiOutPut) || aiOutPut.length !== 1) return aiOutPut;
+
+    const single = aiOutPut[0].trim();
+
+     const sentences = splitByPipes(single);
+
+    return sentences;
+  };
+
+  const buildAIFormattedHtml = () => {
+    const normalized = normalizeAIOutput();
+    if (!normalized || !selectionList) return '';
+    if (!aiOutPut || !Array.isArray(aiOutPut) || !selectionList) return '';
+
+    let html = '';
+    let currentListType = null;
+    let currentItems = [];
+
+    const cleanLine = (str) => {
+      if (!str) return '';
+      const cleaned = str.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+      return cleaned;
+    };
+
+    const flush = () => {
+      if (currentItems.length === 0) return;
+
+      if (currentListType === 'order-list') {
+        html += `<ol>${currentItems.map((t) => `<li>${t}</li>`).join('')}</ol>`;
+      } else if (currentListType === 'unorder-list') {
+        html += `<ul>${currentItems.map((t) => `<li>${t}</li>`).join('')}</ul>`;
+      }
+
+      currentListType = null;
+      currentItems = [];
+    };
+
+    selectionList.forEach((item, i) => {
+      const dirty = normalized[i] || '';
+      const line = cleanLine(dirty);
+
+      if (!line) return;
+
+      if (item['list-type'] === 'order-list' || item['list-type'] === 'unorder-list') {
+        if (!currentListType) currentListType = item['list-type'];
+
+        if (currentListType !== item['list-type']) {
+          flush();
+          currentListType = item['list-type'];
+        }
+
+        currentItems.push(line);
+      } else {
+        if (currentListType) flush();
+        html += `<div>${line}</div>`;
+      }
+    });
+
+    if (currentListType) flush();
+
+    return html;
+  };
+
+  const getCleanListOutput = () => {
+    const normalized = normalizeAIOutput();
+    if (!normalized || !selectionList) return aiOutPut;
+
+    const output = [];
+
+    selectionList.forEach((item, i) => {
+      let text = normalized[i] || '';
+      if (!text.trim()) return;
+
+      text = text
+        .replace(/^\d+\.\s*/, '')
+        .replace(/^•\s*/, '')
+        .replace(/^\|\|\s*/, '')
+        .trim();
+
+      output.push(text);
+    });
+
+    return output;
+  };
 
   const apiResponse = () => {
-    return <SelectedTxt>{aiOutPut}</SelectedTxt>;
+    if (!aiOutPut) return null;
+    const html = buildAIFormattedHtml();
+    return <SelectedTxt dangerouslySetInnerHTML={{ __html: html }} />;
   };
-  
+
   const InitialFlow = () => {
     return (
       <Fragment>
-        <SelectedTxt>{selectedEditorState}</SelectedTxt>
-        {/* <SelectedTxt>{selectedValue}</SelectedTxt> */}
+        <SelectedTxt dangerouslySetInnerHTML={{ __html: selectedDisplayHTML || selectedValue }} />
         <QuickAction $fullWidth $direction="column">
           <ActionTitle>{t('selection_quick_action_title')}</ActionTitle>
           <CTAWrapper>
@@ -454,7 +550,6 @@ const SelectedTxt = styled.div`
   line-height: 24px;
   max-height: 40vh;
   overflow-y: auto;
-  white-space: pre-line;
 
   &::-webkit-scrollbar-track {
     border-radius: 2px;
@@ -470,6 +565,26 @@ const SelectedTxt = styled.div`
   &::-webkit-scrollbar-thumb {
     border-radius: 2px;
     background-color: #428eff;
+  }
+
+  ul,
+  ol {
+    margin-left: 0;
+    margin-bottom: 0px;
+    margin-top: 0px;
+    padding-inline-start: 20px;
+  }
+
+  ul {
+    list-style-type: disc;
+  }
+
+  ol {
+    list-style-type: decimal;
+  }
+
+  li {
+    margin: 0;
   }
 `;
 
